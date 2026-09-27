@@ -87,6 +87,9 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
       await triggerUpload(file);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -205,13 +208,12 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
         </div>
       </div>
 
-      {/* Hidden file input */}
+      {/* Hidden file input supporting all study formats */}
       <input
         ref={fileInputRef}
         type="file"
         className="hidden"
         onChange={handleFileInputChange}
-        accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.zip,.ipynb,.txt"
       />
 
       {/* 3 Main Tabs: Question Papers | Notes | Mini Projects */}

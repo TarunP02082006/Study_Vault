@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ParticleBackground } from './components/ParticleBackground';
 import { Navbar } from './components/Navbar';
 import { HeroSection } from './components/HeroSection';
@@ -33,7 +33,8 @@ import {
   updateStudyNote, 
   deleteStudyNote, 
   calculateStats,
-  resetDemoData
+  resetDemoData,
+  subscribeToSupabaseChanges
 } from './services/supabaseService';
 
 export default function App() {
@@ -49,7 +50,13 @@ export default function App() {
     storageText: '0 KB',
   });
   const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfig>(getSavedConfig());
-  const [activeSubject, setActiveSubject] = useState<Subject | null>(null);
+  const [activeSubjectId, setActiveSubjectId] = useState<string | null>(null);
+
+  // Derive activeSubject from subject ID to prevent re-render cascading
+  const activeSubject = useMemo(() => {
+    if (!activeSubjectId) return null;
+    return subjects.find((s) => s.id === activeSubjectId) || null;
+  }, [subjects, activeSubjectId]);
 
   // Modals state
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -106,20 +113,20 @@ export default function App() {
       setFiles(fs);
       setNotes(ns);
       setStats(st);
-
-      // If active subject exists, update reference
-      if (activeSubject) {
-        const found = enrichedSubs.find((s) => s.id === activeSubject.id);
-        if (found) setActiveSubject(found);
-      }
     } catch (err) {
       console.error('Error loading vault data', err);
     }
-  }, [activeSubject]);
+  }, []);
 
   useEffect(() => {
     loadAllData();
-  }, []);
+    const unsubscribe = subscribeToSupabaseChanges(() => {
+      loadAllData();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [loadAllData, supabaseConfig.isConnected]);
 
   // Save / Update Subject
   const handleSaveSubject = async (subjectData: {
@@ -132,8 +139,9 @@ export default function App() {
       await updateSubject(editSubject.id, subjectData);
       showToast(`Subject "${subjectData.name}" updated successfully.`);
     } else {
-      await createSubject(subjectData);
+      const created = await createSubject(subjectData);
       showToast(`Subject "${subjectData.name}" created!`, 'success');
+      setActiveSubjectId(created.id);
     }
     await loadAllData();
     setEditSubject(null);
@@ -149,8 +157,8 @@ export default function App() {
         'This will permanently delete this subject vault along with all associated question papers, files, and notes.',
       onConfirm: async () => {
         await deleteSubject(subject.id);
-        if (activeSubject?.id === subject.id) {
-          setActiveSubject(null);
+        if (activeSubjectId === subject.id) {
+          setActiveSubjectId(null);
         }
         await loadAllData();
         showToast(`Subject "${subject.name}" deleted.`);
@@ -164,9 +172,16 @@ export default function App() {
     try {
       const newFile = await uploadStudyFile(file, activeSubject.id, category);
       await loadAllData();
-      showToast(`Uploaded "${file.name}" to ${category}.`);
-    } catch (err) {
-      showToast(`Failed to upload ${file.name}`, 'error');
+      showToast(
+        supabaseConfig.isConnected
+          ? `Saved "${file.name}" to Supabase!`
+          : `Uploaded "${file.name}" to ${category}.`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Upload failed', err);
+      showToast(`Upload failed: ${err?.message || 'Check database connection'}`, 'error');
+      throw err;
     }
   };
 
@@ -227,7 +242,7 @@ export default function App() {
     loadAllData();
     showToast(
       isConnected
-        ? 'Connected to live Supabase project!'
+        ? 'Connected to live Supabase project! Only your uploaded files are shown.'
         : 'Switched to local storage demo mode.',
       'info'
     );
@@ -237,12 +252,12 @@ export default function App() {
   const handleResetDemoData = () => {
     resetDemoData();
     loadAllData();
-    showToast('Restored rich sample subjects and question papers.', 'info');
+    showToast('Restored sample subjects and question papers.', 'info');
   };
 
   // Quick upload handler from subject grid card menu
   const handleQuickUpload = (subject: Subject) => {
-    setActiveSubject(subject);
+    setActiveSubjectId(subject.id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -268,7 +283,7 @@ export default function App() {
         }}
         activeView={activeSubject ? 'subject' : 'dashboard'}
         onNavigateHome={() => {
-          setActiveSubject(null);
+          setActiveSubjectId(null);
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
       />
@@ -295,7 +310,7 @@ export default function App() {
             <SubjectGrid
               subjects={subjects}
               onSelectSubject={(subject) => {
-                setActiveSubject(subject);
+                setActiveSubjectId(subject.id);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               onOpenAddSubject={() => {
@@ -317,7 +332,7 @@ export default function App() {
             files={files}
             notes={notes}
             onBack={() => {
-              setActiveSubject(null);
+              setActiveSubjectId(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onUploadFile={handleUploadFile}
@@ -374,17 +389,17 @@ export default function App() {
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
         onSelectSubject={(sub) => {
-          setActiveSubject(sub);
+          setActiveSubjectId(sub.id);
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onSelectFile={(f) => {
           const sub = subjects.find((s) => s.id === f.subject_id);
-          if (sub) setActiveSubject(sub);
+          if (sub) setActiveSubjectId(sub.id);
           setPreviewFile(f);
         }}
         onSelectNote={(n) => {
           const sub = subjects.find((s) => s.id === n.subject_id);
-          if (sub) setActiveSubject(sub);
+          if (sub) setActiveSubjectId(sub.id);
           setPreviewNote(n);
         }}
       />
@@ -395,6 +410,7 @@ export default function App() {
         config={supabaseConfig}
         onSaveConfig={handleSaveSupabaseConfig}
         onResetDemoData={handleResetDemoData}
+        onDataChanged={loadAllData}
       />
 
       <FilePreviewModal
